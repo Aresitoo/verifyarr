@@ -229,8 +229,13 @@ class FakeRadarr:
         return True
 
     def remove_tag(self, movie, tag_id):
+        self.removed = getattr(self, "removed", [])
+        self.removed.append((movie.get("id"), tag_id))
         return True
 
+    # Kept deliberately even though the real client no longer deletes anything: if a
+    # delete path is ever reintroduced, this records it and the deleted == [] assertions
+    # below fail.
     def delete_file(self, file_id):
         self.deleted.append(file_id)
 
@@ -409,6 +414,25 @@ def test_telegram_payload_is_escaped_html():
               "WALL_E" in (sent.get("text") or "") and "[REC]" in (sent.get("text") or ""))
     finally:
         v.urllib.request.urlopen = real
+
+
+def test_a_cleared_flag_lifts_the_tag():
+    """The tag must reflect the current verdict, not the history of one old run."""
+    tmp = tempfile.mkdtemp()
+    cfg = _cfg(tmp)
+    cfg["tag"] = {"enabled": True}
+    with open(cfg["state_file"], "w") as f:
+        json.dump({"61:40": {"movieId": 61, "fileId": 40, "status": "awaiting_retail",
+                             "title": "WALL_E"}}, f)
+    clean = a_movie()                      # EAC3 stream audio: nothing left to flag
+    clean["movieFile"]["mediaInfo"] = mi(audio="EAC3", audio_bps=640000)
+    client = FakeRadarr([clean])
+    v.scan(cfg, client)
+    check("a movie whose flag cleared has its tag removed",
+          getattr(client, "removed", []) == [(61, 7)],
+          "removed=%s" % getattr(client, "removed", None))
+    check("and it is dropped from the state", not json.load(open(cfg["state_file"])),
+          json.load(open(cfg["state_file"])))
 
 
 def main():

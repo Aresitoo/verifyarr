@@ -109,7 +109,7 @@ Three things in that command are deliberate.
 | `predicate.audio_ratio` | `1.5` | audio bitrate versus video bitrate |
 | `predicate.pcm_min_channels` | `5` | uncompressed audio at this many channels or more |
 
-Tagging is the default notification on purpose: no bot, no chat ID, no extra service, and the result is visible in Radarr's own UI. Telegram is optional and never required.
+Tagging is reversible on purpose: when a file stops being flagged the tag is lifted again, so it reflects the current verdict rather than an old run. It is the default notification on purpose: no bot, no chat ID, no extra service, and the result is visible in Radarr's own UI. Telegram is optional and never required.
 
 ## What counts as a match
 

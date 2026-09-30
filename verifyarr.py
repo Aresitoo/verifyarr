@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 RETAIL_TIERS = ("WEBDL", "WEBRIP", "BLURAY", "REMUX")
 PCM_CODECS = ("pcm", "lpcm")
@@ -250,6 +250,8 @@ class Radarr:
         self.call("PUT", "movie/editor", {"movieIds": [movie["id"]], "tags": current + [tag_id]})
         return True
 
+    # Currently uncalled: nothing clears a tag when a file stops being flagged. Kept as the
+    # building block for that fix rather than deleted.
     def remove_tag(self, movie, tag_id):
         current = list(movie.get("tags") or [])
         if tag_id not in current:
@@ -257,12 +259,6 @@ class Radarr:
         self.call("PUT", "movie/editor",
                   {"movieIds": [movie["id"]], "tags": [t for t in current if t != tag_id]})
         return True
-
-    def delete_file(self, file_id):
-        return self.call("DELETE", "moviefile/%s" % file_id)
-
-    def search(self, movie_id):
-        return self.call("POST", "command", {"name": "MoviesSearch", "movieIds": [int(movie_id)]})
 
     def grab(self, guid, indexer_id):
         return self.call("POST", "release", {"guid": guid, "indexerId": indexer_id})
@@ -350,6 +346,25 @@ def scan(cfg, client, now=None, dry=False):
         state[key] = entry
         findings.append((movie, mf, entry, fresh))
 
+    # Which movies are flagged right now, keyed by movie rather than file: the tag belongs to the
+    # movie, so a movie whose flagged file was itself replaced must keep its tag.
+    flagged_movies = set(e[2].get("movieId") for e in findings)
+
+    # A cleared flag whose file is still on disk is the case the eviction below cannot reach: those
+    # keys stay in `seen`, so they are never reconsidered. Without this, a movie that stops being
+    # flagged keeps both a stale record and a stale tag forever.
+    for key in [k for k in state if k in seen]:
+        entry = state[key]
+        if entry.get("status") == "replace_requested" or entry.get("movieId") in flagged_movies:
+            continue
+        if tag_cfg.get("enabled") and tag_id and not dry and entry.get("movieId"):
+            try:
+                if client.remove_tag(client.get("movie/%s" % entry["movieId"]), tag_id):
+                    print("UNTAG %s: flag cleared, tag removed" % (entry.get("title") or key))
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+                print("untag %s: failed (%s)" % (key, str(e)[:60]))
+        state.pop(key, None)
+
     # A file that is gone, or replaced by a new fileId, no longer needs watching, EXCEPT a key whose
     # replacement we already started. Evicting that immediately would make us forget that we deleted
     # a file and why, which is how you end up with an empty library and no record of the cause.
@@ -358,6 +373,16 @@ def scan(cfg, client, now=None, dry=False):
         if entry.get("status") == "replace_requested" and \
                 _within_days(entry.get("replacedAt"), TOMBSTONE_DAYS):
             continue
+        # The file itself is gone or was replaced, and the movie is not flagged any more, so our tag
+        # is stale. remove_tag only ever touches our own tag id.
+        if (tag_cfg.get("enabled") and tag_id and not dry and entry.get("movieId")
+                and entry["movieId"] not in flagged_movies):
+            try:
+                if client.remove_tag(client.get("movie/%s" % entry["movieId"]), tag_id):
+                    print("UNTAG %s: flag cleared, tag removed" % (entry.get("title") or key))
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+                # Never let a tag problem stop a scan: the verdict matters more than the tag.
+                print("untag %s: failed (%s)" % (key, str(e)[:60]))
         state.pop(key, None)
     if tag_cfg.get("enabled") and tag_id and not dry:
         for movie, mf, entry, fresh in findings:
