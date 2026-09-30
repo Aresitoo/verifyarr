@@ -51,7 +51,7 @@ Python 3, standard library only. No pip, no venv, no container required.
 git clone https://github.com/Aresitoo/verifyarr.git && cd verifyarr
 cp config.example.json config.json     # then put your Radarr URL and API key in it
 python3 verifyarr.py doctor            # confirms config, connectivity, and how many movies it sees
-python3 verifyarr.py scan              # the actual check; writes nothing
+python3 verifyarr.py scan              # the actual check; report mode only tags and remembers
 ```
 
 It is standard library only throughout, so there is nothing to compile and nothing platform specific. The suite passes on Python 3.12 on Windows and on 3.14 on Linux. Run it either way:
@@ -68,16 +68,24 @@ A minimal Alpine image is provided for container hosts (Unraid, TrueNAS, Synolog
 ```bash
 git clone https://github.com/Aresitoo/verifyarr.git && cd verifyarr
 cp config.example.json config.json     # fill in your Radarr URL and API key
-docker build -t verifyarr .
+docker build -t verifyarr .            # .dockerignore keeps config.json out of the build context
 ```
 
 Run a scan:
 ```bash
-docker run --rm \
-  -v $(pwd)/config.json:/app/config.json:ro \
-  -v $(pwd)/verifyarr-state.json:/app/verifyarr-state.json \
+touch verifyarr-state.json             # create it first, see below
+docker run --rm --read-only \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/config.json:/app/config.json:ro" \
+  -v "$(pwd)/verifyarr-state.json:/app/verifyarr-state.json" \
   verifyarr scan
 ```
+
+Three things in that command are deliberate:
+
+* **`touch verifyarr-state.json` first.** Docker creates a directory when you bind-mount a host path that does not exist yet, which prevents writing the state file.
+* **`--user "$(id -u):$(id -g)"`.** The image runs as uid 1000 by default so files are not owned by root. Override if your host differs (e.g. Unraid is commonly 99:100).
+* **`--read-only`.** The container root filesystem is mounted read-only for security; verifyarr operates purely in memory and writes only to the state file.
 
 ## Configuration
 

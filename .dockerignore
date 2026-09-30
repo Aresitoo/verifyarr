@@ -1,0 +1,9 @@
+# The build context is your whole checkout, so keep the API key and runtime state out of it.
+config.json
+verifyarr-state.json
+*.bak_*
+__pycache__/
+.pytest_cache/
+.git/
+tests/
+*.env
