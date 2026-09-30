@@ -1,0 +1,25 @@
+{
+  "radarr": {
+    "url": "http://127.0.0.1:7878",
+    "api_key": "REPLACE_ME_WITH_YOUR_RADARR_API_KEY"
+  },
+  "mode": "report",
+  "state_file": "verifyarr-state.json",
+  "timeout": 30,
+  "tag": {
+    "enabled": true,
+    "label": "verifyarr-suspect"
+  },
+  "telegram": {
+    "enabled": false,
+    "token": "",
+    "chat_id": "",
+    "thread_id": ""
+  },
+  "predicate": {
+    "min_days_to_retail": 3,
+    "thin_video_bps": 3500000,
+    "audio_ratio": 1.5,
+    "pcm_min_channels": 5
+  }
+}

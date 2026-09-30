@@ -1,0 +1,18 @@
+# Your config holds a Radarr API key. Never commit it.
+config.json
+
+# Backups taken before a repair, and one-off repair scripts.
+*.bak_*
+apply_*fixes.py
+verify_claims*.py
+
+# Runtime state, yours not the project's.
+verifyarr-state.json
+verifyarr-state.json.*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
