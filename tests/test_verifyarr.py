@@ -73,6 +73,25 @@ def test_inversion_alone_is_flagged():
           v.looks_like_disguised_preretail(mi(audio="EAC3"), "WEBDL-1080p", 9.4, 50.4) != [])
 
 
+def test_candidate_accepts_a_hyphenated_tier_name():
+    """The candidate side must normalise separators too, or a real upgrade looks like none exists."""
+    check("WEB-DL-1080p candidate is accepted",
+          v.is_approved_candidate({"title": "Movie.2026.1080p.WEB-DL.DDP5.1.H.264-GRP",
+                                   "quality": {"quality": {"name": "WEB-DL-1080p"}},
+                                   "approved": True, "downloadUrl": "http://idx/x.nzb",
+                                   "guid": "abc123", "indexerId": 3}) is True)
+    check("a candidate without a guid is still refused",
+          v.is_approved_candidate({"title": "Movie.2026.1080p.WEB-DL.DDP5.1.H.264-GRP",
+                                   "quality": {"quality": {"name": "WEBDL-1080p"}},
+                                   "approved": True, "downloadUrl": "http://idx/x.nzb",
+                                   "indexerId": 3}) is False)
+    check("a candidate without a positive indexerId is still refused",
+          v.is_approved_candidate({"title": "Movie.2026.1080p.WEB-DL.DDP5.1.H.264-GRP",
+                                   "quality": {"quality": {"name": "WEBDL-1080p"}},
+                                   "approved": True, "downloadUrl": "http://idx/x.nzb",
+                                   "guid": "abc123", "indexerId": 0}) is False)
+
+
 def test_tier_and_codec_variants_are_recognised():
     """Radarr's own names are WEBDL-1080p, but user-defined qualities and imported profiles vary."""
     check("WEB-DL-1080p (hyphenated) is recognised",

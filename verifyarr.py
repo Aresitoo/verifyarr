@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 RETAIL_TIERS = ("WEBDL", "WEBRIP", "BLURAY", "REMUX")
 PCM_CODECS = ("pcm", "lpcm")
@@ -154,8 +154,11 @@ def is_approved_candidate(rel):
         return False
     if re.search(r"\b(pcm|lpcm|line|ts|cam|dcp)\b", str(rel["title"]), re.I):
         return False
-    quality = ((rel.get("quality") or {}).get("quality") or {}).get("name") or ""
-    if not quality.upper().startswith(RETAIL_TIERS):
+    # Same normalisation the predicate uses: user-defined qualities and imported profiles turn up
+    # as WEB-DL-1080p, web.dl, WEB_DL. Without this a good candidate is refused as if none existed.
+    quality = re.sub(r"[\s._-]", "", str(((rel.get("quality") or {}).get("quality") or {})
+                                         .get("name") or "").upper())
+    if not quality.startswith(RETAIL_TIERS):
         return False
     return rel.get("approved") is True
 
@@ -164,8 +167,8 @@ def movie_is_grabbable(movie):
     """PURE. Would a search actually be able to grab anything for this movie?
 
     `isAvailable` is computed by the arr from minimumAvailability plus the release dates, so it is
-    the field to trust rather than the raw status string. Missing or false means refuse: deleting a
-    file first while nothing can replace it is the one outcome worth avoiding.
+    the field to trust rather than the raw status string. Missing or false means refuse: asking for
+    a replacement the arr would not fetch is the one outcome worth avoiding.
     """
     m = movie or {}
     if m.get("isAvailable") is not True:
@@ -381,7 +384,11 @@ def scan(cfg, client, now=None, dry=False):
 
 
 def replace(cfg, client, confirm=False, now=None, dry=False):
-    """The opt-in half. Three gates, all re-checked immediately before anything is deleted."""
+    """The opt-in half. Three gates, all re-checked immediately before anything is grabbed.
+
+    Nothing is deleted. The grab asks Radarr to fetch a better release, and the incumbent file stays
+    in place until the new one imports, so a failed search cannot cost the user their copy.
+    """
     if cfg.get("mode") != "replace":
         print("replace mode is off (mode: %s). Nothing done." % cfg.get("mode"))
         return 0
@@ -434,7 +441,14 @@ def replace(cfg, client, confirm=False, now=None, dry=False):
             except EOFError:
                 print("      no tty and no --yes, skipping")
                 continue
-        client.grab(best.get("guid"), best.get("indexerId"))
+        try:
+            client.grab(best.get("guid"), best.get("indexerId"))
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+            # Radarr answers 404 when it cannot map the release to a movie and 409 when the
+            # indexer or download-client handoff fails. Either way the incumbent file is untouched,
+            # so a failure here is a skip, not a loss.
+            print("skip %s: grab failed (%s)" % (key, str(e)[:80]))
+            continue
         entry["status"] = "replace_requested"
         entry["replacedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
         entry["candidate"] = str(best.get("title"))[:120]
@@ -442,6 +456,11 @@ def replace(cfg, client, confirm=False, now=None, dry=False):
         entry["grabbedGuid"] = best.get("guid")
         entry["grabbedIndexerId"] = best.get("indexerId")
         done += 1
+        # Persist now, not at the end: a later grab failing (or the caller interrupting) must not
+        # erase the record of the ones that already happened. That amnesia is what the tombstone
+        # work exists to prevent, so the record cannot be the thing that goes missing.
+        save_state(cfg["state_file"], state)
+        state_before = json.dumps(state, sort_keys=True)
         notify_telegram(cfg, "Verifyarr: grabbed %s for %s (%s, score %s). "
                              "Incumbent file remains until new file imports."
                              % (str(best.get("title"))[:70], entry.get("title"),
@@ -487,8 +506,8 @@ def main(argv=None):
     command = args.command or ("replace" if cfg.get("mode") == "replace" else "scan")
     if args.command == "replace" and cfg.get("mode") != "replace":
         # The explicit command overrides the config default, which is what the README documents. The
-        # prompt, or --yes, is still what gates the deletion, so this cannot delete anything by
-        # surprise: the config value only ever decided what a BARE invocation does.
+        # prompt, or --yes, is still what gates the grab, so this cannot act on anything by surprise:
+        # the config value only ever decided what a BARE invocation does.
         print("note: replace requested on the command line; the config says mode: %s"
               % cfg.get("mode"))
         cfg["mode"] = "replace"

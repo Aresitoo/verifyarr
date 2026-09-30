@@ -57,7 +57,7 @@ python3 verifyarr.py scan              # the actual check; report mode only tags
 It is standard library only throughout, so there is nothing to compile and nothing platform specific. The suite passes on Python 3.12 on Windows and on 3.14 on Linux. Run it either way:
 
 ```bash
-python3 tests/test_verifyarr.py        # prints 62/62, exits non-zero on failure
+python3 tests/test_verifyarr.py        # prints 70/70, exits non-zero on failure
 pytest tests/test_verifyarr.py
 ```
 
