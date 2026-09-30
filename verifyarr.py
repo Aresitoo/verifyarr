@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 RETAIL_TIERS = ("WEBDL", "WEBRIP", "BLURAY", "REMUX")
 PCM_CODECS = ("pcm", "lpcm")
@@ -146,8 +146,11 @@ def is_approved_candidate(rel):
     `approved` is the arr's own verdict, so this can never offer something the profile would refuse.
     Verified the hard way: an unfiltered version of this offered a release scoring -139,399 as
     "genuine retail" against an incumbent at -139,999, i.e. no upgrade at all.
+    v2: requires a valid `guid` and positive `indexerId` so Radarr can grab it programmatically.
     """
     if not str(rel.get("title") or "") or not rel.get("downloadUrl"):
+        return False
+    if not str(rel.get("guid") or "").strip() or not rel.get("indexerId") or int(rel.get("indexerId", 0)) <= 0:
         return False
     if re.search(r"\b(pcm|lpcm|line|ts|cam|dcp)\b", str(rel["title"]), re.I):
         return False
@@ -257,6 +260,9 @@ class Radarr:
 
     def search(self, movie_id):
         return self.call("POST", "command", {"name": "MoviesSearch", "movieIds": [int(movie_id)]})
+
+    def grab(self, guid, indexer_id):
+        return self.call("POST", "release", {"guid": guid, "indexerId": indexer_id})
 
 
 def notify_telegram(cfg, text):
@@ -416,8 +422,8 @@ def replace(cfg, client, confirm=False, now=None, dry=False):
 
         best = max(approved, key=lambda r: r.get("customFormatScore") or -10 ** 9)
         print("READY %s: %s" % (entry.get("title"), str(best.get("title"))[:70]))
-        print("      deletes file id %s, then searches (%d approved option(s), best score %s)"
-              % (mf.get("id"), len(approved), best.get("customFormatScore")))
+        print("      grabs release from indexer %s without deleting incumbent file (%d approved option(s), best score %s)"
+              % (best.get("indexerId"), len(approved), best.get("customFormatScore")))
         if dry:
             continue
         if not confirm:
@@ -428,15 +434,19 @@ def replace(cfg, client, confirm=False, now=None, dry=False):
             except EOFError:
                 print("      no tty and no --yes, skipping")
                 continue
-        client.delete_file(mf.get("id"))
-        client.search(movie_id)
+        client.grab(best.get("guid"), best.get("indexerId"))
         entry["status"] = "replace_requested"
         entry["replacedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
         entry["candidate"] = str(best.get("title"))[:120]
         entry["candidateScore"] = best.get("customFormatScore")
+        entry["grabbedGuid"] = best.get("guid")
+        entry["grabbedIndexerId"] = best.get("indexerId")
         done += 1
-        notify_telegram(cfg, "Verifyarr: deleted %s and searched again, best approved option "
-                             "is the one above." % entry.get("title"))
+        notify_telegram(cfg, "Verifyarr: grabbed %s for %s (%s, score %s). "
+                             "Incumbent file remains until new file imports."
+                             % (str(best.get("title"))[:70], entry.get("title"),
+                                best.get("releaseGroup") or "unknown",
+                                best.get("customFormatScore")))
     if json.dumps(state, sort_keys=True) != state_before:
         save_state(cfg["state_file"], state)
     return done
@@ -450,7 +460,7 @@ def main(argv=None):
                     help="scan (default), replace, or doctor. Falls back to the config's mode.")
     ap.add_argument("--config", default=os.environ.get("VERIFYARR_CONFIG", "config.json"))
     ap.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
-    ap.add_argument("--yes", action="store_true", help="do not prompt before deleting")
+    ap.add_argument("--yes", action="store_true", help="do not prompt before replacing")
     ap.add_argument("--json", action="store_true", help="machine readable output")
     ap.add_argument("--version", action="version", version="verifyarr %s" % __version__)
     args = ap.parse_args(argv)

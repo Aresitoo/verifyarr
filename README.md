@@ -6,7 +6,7 @@ Radarr stores what it found when it imported a file, in `movieFile.mediaInfo`. N
 
 **Report only by default.** 
 
-There is an opt-in `replace` mode that deletes the flagged file and searches again, and it refuses unless three conditions hold. Read [Replace mode](#replace-mode) before you turn it on.
+There is an opt-in `replace` mode that instructs Radarr to directly grab a verified retail replacement without deleting the incumbent file first. Read [Replace mode](#replace-mode) before you turn it on.
 
 ## What it will never do
 
@@ -163,7 +163,7 @@ no flagged files. 0 entr(y/ies) in state.
 
 ## Replace mode
 
-Off unless you set `mode` to `replace`, or pass `replace` as the command, which overrides the config. The deletion itself always needs a prompt or `--yes`. It re-checks three things immediately before deleting anything and skips with a printed reason if any of them fails:
+Off unless you set `mode` to `replace`, or pass `replace` as the command, which overrides the config. Grabbing a replacement always needs a prompt or `--yes`. It re-checks three things immediately before acting and skips with a printed reason if any of them fails:
 
 ```mermaid
 flowchart TD
@@ -175,20 +175,20 @@ flowchart TD
     G3 -- No --> S3[Skip: no retail replacement yet]
     G3 -- Yes --> P{Prompt confirmed<br>or --yes flag?}
     P -- No --> S4[Skip: user declined or no TTY]
-    P -- Yes --> DEL[Delete file &amp; trigger MoviesSearch]
+    P -- Yes --> GRAB[POST /api/v3/release: Direct Grab<br>Incumbent file kept until import]
 ```
 
-1. the file on disk is still the file that was flagged, so a stale run can never delete a newer file;
-2. Radarr reports the movie as available and monitored, because it will not grab for an unmonitored movie, and deleting a file nothing can replace is losing it;
-3. something Radarr itself accepts is on offer, meaning a release with `approved: true`.
+1. the file on disk is still the file that was flagged, so a stale run can never act on a newer file;
+2. Radarr reports the movie as available and monitored, because it will not grab for an unmonitored movie;
+3. something Radarr itself accepts is on offer, meaning a release with `approved: true`, valid `guid`, and positive `indexerId`.
 
-Then it deletes the flagged file and triggers `MoviesSearch`, so Radarr picks the replacement using the profile you already tuned. It does not choose the release itself.
+Then it sends a direct grab command to Radarr (`POST /api/v3/release`) targeting the highest-scoring approved release. Radarr queues the download in your download client and upgrades the file upon import. **The incumbent file is never deleted in advance**, so if the download stalls or an indexer fails, your existing file remains safe on disk.
 
-Without `--yes` it prompts before each deletion, and `--dry-run` prints what it would do without touching anything.
+Without `--yes` it prompts before each grab, and `--dry-run` prints what it would do without touching anything.
 
 ```bash
 python3 verifyarr.py replace --dry-run     # show the plan
-python3 verifyarr.py replace               # ask before each deletion
+python3 verifyarr.py replace               # ask before each grab
 python3 verifyarr.py replace --yes         # unattended, for cron
 ```
 
@@ -198,7 +198,7 @@ python3 verifyarr.py replace --yes         # unattended, for cron
 ```text
 $ python3 verifyarr.py replace
 READY Coyote vs. Acme: Coyote.vs.Acme.2026.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-BYNDR
-      deletes file id 40, then searches (1 approved option(s), best score 864080)
+      grabs release from indexer 5 without deleting incumbent file (1 approved option(s), best score 864080)
       proceed? [y/N] y
 nothing outstanding.
 ```

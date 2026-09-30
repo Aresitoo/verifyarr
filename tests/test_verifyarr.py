@@ -120,9 +120,11 @@ def test_other_negatives():
 
 # ---------------------------------------------------------------- candidate and availability gates
 def rel(title="Coyote.vs.Acme.2026.1080p.AMZN.WEB-DL.DDP5.1.Atmos.H.264-BYNDR",
-        tier="WEBDL-1080p", approved=True, url="http://idx/x.nzb"):
+        tier="WEBDL-1080p", approved=True, url="http://idx/x.nzb",
+        guid="https://indexer/guid123", indexer_id=5):
     return {"title": title, "quality": {"quality": {"name": tier}}, "approved": approved,
-            "downloadUrl": url, "customFormatScore": 864080}
+            "downloadUrl": url, "customFormatScore": 864080,
+            "guid": guid, "indexerId": indexer_id}
 
 
 def test_candidate_gate():
@@ -140,6 +142,10 @@ def test_candidate_gate():
     check("HDTV tier -> rejected", v.is_approved_candidate(rel(tier="HDTV-1080p")) is False)
     check("no downloadUrl -> rejected", v.is_approved_candidate(rel(url=None)) is False)
     check("empty dict -> rejected", v.is_approved_candidate({}) is False)
+    check("no guid -> rejected", v.is_approved_candidate(rel(guid=None)) is False)
+    check("empty guid -> rejected", v.is_approved_candidate(rel(guid="")) is False)
+    check("no indexerId -> rejected", v.is_approved_candidate(rel(indexer_id=None)) is False)
+    check("zero indexerId -> rejected", v.is_approved_candidate(rel(indexer_id=0)) is False)
 
 
 def test_availability_gate():
@@ -181,7 +187,7 @@ class FakeRadarr:
     def __init__(self, movies, releases=None):
         self._movies = movies
         self._releases = releases or {}
-        self.deleted, self.searched, self.tagged = [], [], []
+        self.deleted, self.searched, self.tagged, self.grabbed = [], [], [], []
 
     def movies(self):
         return self._movies
@@ -211,6 +217,9 @@ class FakeRadarr:
 
     def search(self, mid):
         self.searched.append(mid)
+
+    def grab(self, guid, indexer_id):
+        self.grabbed.append({"guid": guid, "indexerId": indexer_id})
 
 
 def _date(days):
@@ -287,11 +296,11 @@ def test_replace_refuses_every_failing_gate():
                                         "status": "awaiting_retail", "title": "WALL_E"}}, f)
         client = FakeRadarr([movie], {"61": releases})
         v.replace(cfg, client, confirm=True)
-        check("replace refuses when %s" % label, client.deleted == [],
-              "deleted=%s" % client.deleted)
+        check("replace refuses when %s" % label, client.deleted == [] and client.grabbed == [],
+              "deleted=%s grabbed=%s" % (client.deleted, client.grabbed))
 
 
-def test_replace_deletes_when_all_gates_pass():
+def test_replace_grabs_when_all_gates_pass():
     tmp = tempfile.mkdtemp()
     cfg = _cfg(tmp, mode="replace")
     with open(cfg["state_file"], "w") as f:
@@ -299,12 +308,15 @@ def test_replace_deletes_when_all_gates_pass():
                              "title": "WALL_E"}}, f)
     client = FakeRadarr([a_movie()], {"61": [rel()]})
     done = v.replace(cfg, client, confirm=True)
-    check("replace deletes the flagged file and searches",
-          client.deleted == [40] and client.searched == [61] and done == 1,
-          "deleted=%s searched=%s" % (client.deleted, client.searched))
+    check("replace grabs without deleting the incumbent file",
+          client.deleted == [] and client.grabbed == [{"guid": "https://indexer/guid123", "indexerId": 5}] and done == 1,
+          "deleted=%s grabbed=%s" % (client.deleted, client.grabbed))
     state = json.load(open(cfg["state_file"]))
     check("the record is marked replace_requested",
           state["61:40"]["status"] == "replace_requested", state.get("61:40", {}).get("status"))
+    check("the record retains grabbed guid and indexerId",
+          state["61:40"].get("grabbedGuid") == "https://indexer/guid123" and
+          state["61:40"].get("grabbedIndexerId") == 5)
 
 
 def test_cli_replace_command_actually_replaces():
@@ -324,8 +336,8 @@ def test_cli_replace_command_actually_replaces():
     try:
         rc = v.main(["replace", "--config", cfg_path, "--yes"])
         check("`verifyarr replace` acts even when the config says mode: report",
-              fake.deleted == [40] and fake.searched == [61],
-              "deleted=%s searched=%s rc=%s" % (fake.deleted, fake.searched, rc))
+              fake.deleted == [] and fake.grabbed == [{"guid": "https://indexer/guid123", "indexerId": 5}],
+              "deleted=%s grabbed=%s rc=%s" % (fake.deleted, fake.grabbed, rc))
         check("a completed replace exits 0 (nothing outstanding)", rc == 0, "rc=%s" % rc)
     finally:
         v.Radarr = real_client
