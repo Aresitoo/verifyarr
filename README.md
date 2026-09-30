@@ -81,11 +81,13 @@ docker run --rm --read-only \
   verifyarr scan
 ```
 
-Three things in that command are deliberate:
+Three things in that command are deliberate.
 
-* **`touch verifyarr-state.json` first.** Docker creates a directory when you bind-mount a host path that does not exist yet, which prevents writing the state file.
-* **`--user "$(id -u):$(id -g)"`.** The image runs as uid 1000 by default so files are not owned by root. Override if your host differs (e.g. Unraid is commonly 99:100).
-* **`--read-only`.** The container root filesystem is mounted read-only for security; verifyarr operates purely in memory and writes only to the state file.
+**`touch verifyarr-state.json` first.** Docker creates a *directory* when you bind-mount a host path that does not exist yet, and the tool would then fail to write its state file.
+
+**`--user "$(id -u):$(id -g)"`.** The image runs as uid 1000 by default, so it does not leave root-owned files in your appdata. If your host uses a different uid, Unraid is commonly 99:100, override it as shown or the state file will end up belonging to the wrong user.
+
+**`--read-only`.** The container root filesystem is mounted read-only for security; verifyarr writes nothing but the state file.
 
 ## Configuration
 
