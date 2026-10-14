@@ -245,6 +245,16 @@ class FakeRadarr:
     def grab(self, guid, indexer_id):
         self.grabbed.append({"guid": guid, "indexerId": indexer_id})
 
+    def command(self, name, **kwargs):
+        self.commands = getattr(self, "commands", [])
+        self.commands.append((name, kwargs))
+        return {"id": 1, "name": name}
+
+    def search_movies(self, movie_ids):
+        self.searched_movies = getattr(self, "searched_movies", [])
+        self.searched_movies.extend(movie_ids)
+        return self.command("MoviesSearch", movieIds=movie_ids)
+
 
 def _date(days):
     return time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime(time.time() + days * 86400))
@@ -435,6 +445,27 @@ def test_a_cleared_flag_lifts_the_tag():
           json.load(open(cfg["state_file"])))
 
 
+def test_drops_detection():
+    past_movie = {"id": 101, "title": "Past Movie", "monitored": True, "hasFile": False,
+                  "digitalRelease": _date(-5), "status": "released"}
+    future_movie = {"id": 102, "title": "Future Movie", "monitored": True, "hasFile": False,
+                    "digitalRelease": _date(5), "status": "announced"}
+    unmon_movie = {"id": 103, "title": "Unmonitored Movie", "monitored": False, "hasFile": False,
+                   "digitalRelease": _date(-5), "status": "released"}
+    has_file_movie = {"id": 104, "title": "Existing Movie", "monitored": True, "hasFile": True,
+                      "digitalRelease": _date(-5), "status": "released"}
+
+    client = FakeRadarr([past_movie, future_movie, unmon_movie, has_file_movie])
+    drops = v.check_drops(client)
+    check("check_drops finds released movie without file",
+          len(drops) == 1 and drops[0]["movieId"] == 101)
+    check("check_drops records release date", drops[0]["releaseDate"] == str(past_movie["digitalRelease"])[:10])
+
+    client.search_movies([d["movieId"] for d in drops])
+    check("search_movies dispatches MoviesSearch command",
+          getattr(client, "searched_movies", []) == [101])
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
@@ -442,7 +473,6 @@ def main():
     bad = [n for n, ok in RESULTS if not ok]
     print("\nVERIFYARR TESTS: %d/%d passed" % (len(RESULTS) - len(bad), len(RESULTS)))
     return 1 if bad else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

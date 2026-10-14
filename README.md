@@ -1,3 +1,20 @@
+<p align="center">
+  <img src="assets/banner.jpg" alt="Verifyarr" width="100%">
+</p>
+
+<p align="center">
+  <strong>Automated Media Integrity & Forensic Quality Verification for Radarr</strong>
+</p>
+
+<p align="center">
+  <a href="#the-problem-it-solves"><img src="https://img.shields.io/badge/Radarr-v3%20%7C%20v4%20%7C%20v5-blue?logo=radarr" alt="Radarr"></a>
+  <a href="#install"><img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-green?logo=python" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/Tests-75%2F75%20Passing-brightgreen" alt="Tests"></a>
+</p>
+
+---
+
 # Verifyarr
 
 Checks whether the file you actually have matches the quality Radarr graded it as.
@@ -52,6 +69,8 @@ git clone https://github.com/Aresitoo/verifyarr.git && cd verifyarr
 cp config.example.json config.json     # then put your Radarr URL and API key in it
 python3 verifyarr.py doctor            # confirms config, connectivity, and how many movies it sees
 python3 verifyarr.py scan              # the actual check; report mode only tags and remembers
+python3 verifyarr.py drops             # check for released movies that Radarr's RSS missed
+python3 verifyarr.py drops --snatch    # trigger Radarr to search & snatch missed drops
 ```
 
 It is standard library only throughout, so there is nothing to compile and nothing platform specific. The suite passes on Python 3.12 on Windows and on 3.14 on Linux. Run it either way:
@@ -208,6 +227,23 @@ nothing outstanding.
 $ python3 verifyarr.py replace
 skip 61:40: no approved replacement on offer yet
 1 item(s) still awaiting retail.
+```
+
+## Drops mode (`verifyarr drops`)
+
+Radarr relies on **RSS sync** (the rolling feed of recently posted releases) to grab newly available media. If you requested a movie months before its release, and the digital WEB-DL drops when Radarr's RSS window has passed or TMDb hasn't refreshed yet, Radarr **never searches for it automatically**. It will sit in your library as monitored and missing forever.
+
+`verifyarr drops` checks for monitored movies whose official digital or physical release date has arrived but have no file.
+
+```bash
+python3 verifyarr.py drops             # list released movies missing files
+python3 verifyarr.py drops --snatch    # dispatch Radarr MoviesSearch to snatch them
+python3 verifyarr.py drops --json      # machine-readable JSON output
+```
+
+In cron, run daily to catch any missed drops:
+```cron
+0 10 * * * cd /opt/verifyarr && python3 verifyarr.py drops --snatch >/dev/null 2>&1
 ```
 
 ## Exit codes

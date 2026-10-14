@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 RETAIL_TIERS = ("WEBDL", "WEBRIP", "BLURAY", "REMUX")
 PCM_CODECS = ("pcm", "lpcm")
@@ -262,6 +262,14 @@ class Radarr:
 
     def grab(self, guid, indexer_id):
         return self.call("POST", "release", {"guid": guid, "indexerId": indexer_id})
+
+    def command(self, name, **kwargs):
+        body = {"name": name}
+        body.update(kwargs)
+        return self.call("POST", "command", body)
+
+    def search_movies(self, movie_ids):
+        return self.command("MoviesSearch", movieIds=[int(m) for m in movie_ids])
 
 
 def notify_telegram(cfg, text):
@@ -496,15 +504,53 @@ def replace(cfg, client, confirm=False, now=None, dry=False):
     return done
 
 
+def check_drops(client, now=None):
+    """Detects monitored missing movies whose digital or physical release date has arrived.
+    Returns list of dicts: movieId, title, year, releaseDate, status."""
+    today_epoch = now if now is not None else time.time()
+    findings = []
+    for m in client.movies():
+        if not m.get("monitored") or m.get("hasFile"):
+            continue
+        dig_days = days_until(m.get("digitalRelease"), today_epoch)
+        phys_days = days_until(m.get("physicalRelease"), today_epoch)
+        st = str(m.get("status") or "").lower()
+
+        is_retail = False
+        rel_date = None
+        if dig_days is not None and dig_days <= 0:
+            is_retail = True
+            rel_date = str(m.get("digitalRelease") or "")[:10]
+        elif phys_days is not None and phys_days <= 0:
+            is_retail = True
+            rel_date = str(m.get("physicalRelease") or "")[:10]
+        elif st == "released":
+            is_retail = True
+            rel_date = str(m.get("digitalRelease") or m.get("physicalRelease") or "released")[:10]
+
+        if not is_retail:
+            continue
+
+        findings.append({
+            "movieId": m.get("id"),
+            "title": m.get("title"),
+            "year": m.get("year"),
+            "releaseDate": rel_date,
+            "status": st
+        })
+    return findings
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="verifyarr",
                                  description="Check whether files match the quality they were "
                                              "graded as. Report only unless mode is replace.")
-    ap.add_argument("command", choices=("scan", "replace", "doctor"), nargs="?",
-                    help="scan (default), replace, or doctor. Falls back to the config's mode.")
+    ap.add_argument("command", choices=("scan", "replace", "doctor", "drops"), nargs="?",
+                    help="scan (default), replace, doctor, or drops. Falls back to the config's mode.")
     ap.add_argument("--config", default=os.environ.get("VERIFYARR_CONFIG", "config.json"))
     ap.add_argument("--dry-run", action="store_true", help="show what would happen, change nothing")
     ap.add_argument("--yes", action="store_true", help="do not prompt before replacing")
+    ap.add_argument("--snatch", action="store_true", help="in drops mode, trigger Radarr MoviesSearch for missed titles")
     ap.add_argument("--json", action="store_true", help="machine readable output")
     ap.add_argument("--version", action="version", version="verifyarr %s" % __version__)
     args = ap.parse_args(argv)
@@ -524,6 +570,42 @@ def main(argv=None):
         except Exception as e:
             print("movies  : API call failed: %s" % str(e)[:80])
         return 0
+
+    if args.command == "drops":
+        try:
+            drops = check_drops(client)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+            _die("Radarr call failed: %s" % str(e)[:120])
+
+        if args.json:
+            print(json.dumps(drops, indent=2))
+            return 0 if not drops else 1
+
+        if not drops:
+            print("no missed retail drops. All released movies have files.")
+            return 0
+
+        print("Found %d released movie(s) with no file:" % len(drops))
+        for d in drops:
+            print("  - %s (%s) [released %s]" % (d["title"], d.get("year") or "", d["releaseDate"]))
+
+        if args.snatch or args.yes:
+            mids = [d["movieId"] for d in drops]
+            if args.dry_run:
+                print("DRY-RUN: would dispatch MoviesSearch for %d movie(s)." % len(mids))
+                return 0
+            try:
+                client.search_movies(mids)
+                print("Dispatched Radarr MoviesSearch for %d movie(s)." % len(mids))
+                notify_telegram(cfg, "Verifyarr: dispatched search for %d missed retail drop(s): %s"
+                                % (len(mids), ", ".join(d["title"] for d in drops[:3])))
+                return 0
+            except Exception as e:
+                print("Failed to dispatch search: %s" % e, file=sys.stderr)
+                return 2
+        else:
+            print("\nRun with --snatch (or --yes) to trigger an immediate search in Radarr.")
+            return 1
 
     # The positional command decides what runs; the config value is only the default for a bare
     # invocation. Previously the argument was parsed and then ignored, so `verifyarr replace` scanned
