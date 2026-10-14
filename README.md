@@ -233,7 +233,18 @@ skip 61:40: no approved replacement on offer yet
 
 Radarr relies on **RSS sync** (the rolling feed of recently posted releases) to grab newly available media. If you requested a movie months before its release, and the digital WEB-DL drops when Radarr's RSS window has passed or TMDb hasn't refreshed yet, Radarr **never searches for it automatically**. It will sit in your library as monitored and missing forever.
 
-`verifyarr drops` checks for monitored movies whose official digital or physical release date has arrived but have no file.
+`verifyarr drops` checks for monitored movies whose official digital or physical release date has arrived but have no file:
+
+```mermaid
+flowchart TD
+    A[Monitored movie in Radarr] --> B{Has file?}
+    B -- Yes --> Z1[Ignore: already acquired]
+    B -- No --> C{Retail date arrived?<br>digital or physical &le; today}
+    C -- No --> Z2[Standby: awaiting retail drop]
+    C -- Yes --> D{--snatch flag passed?}
+    D -- No --> REP[Report: print missed release drop]
+    D -- Yes --> POST[POST /api/v3/command<br>MoviesSearch: auto-snatch via Radarr]
+```
 
 ```bash
 python3 verifyarr.py drops             # list released movies missing files
@@ -282,7 +293,7 @@ These are deliberate, not oversights.
 
   If a movie has no digital or physical date, nothing happens, by design. Silence beats a guess.
 
-- **Replace deletes first, then asks Radarr to search.** If that search finds nothing it accepts, the movie is left with no file at all. That is why the three gates exist and why the prompt is on by default rather than off.
+- **Replace mode is non-destructive.** It grabs the highest-scoring approved release directly via `POST /api/v3/release`. The existing file is never deleted in advance—Radarr manages the download and upgrades the file only once the replacement imports cleanly.
 
 - **It catches a rare problem.** 
 
