@@ -10,7 +10,7 @@
   <a href="#the-problem-it-solves"><img src="https://img.shields.io/badge/Radarr-v3%20%7C%20v4%20%7C%20v5-blue?logo=radarr" alt="Radarr"></a>
   <a href="#install"><img src="https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-green?logo=python" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow" alt="License"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/Tests-75%2F75%20Passing-brightgreen" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/Tests-94%2F94%20Passing-brightgreen" alt="Tests"></a>
 </p>
 
 ---
@@ -127,30 +127,46 @@ Three things in that command are deliberate.
 | `predicate.thin_video_bps` | `3500000` | what counts as thin video for the inversion signal |
 | `predicate.audio_ratio` | `1.5` | audio bitrate versus video bitrate |
 | `predicate.pcm_min_channels` | `5` | uncompressed audio at this many channels or more |
+| `predicate.min_feature_runtime` | `60` | feature film lower bound in minutes (skips shorts/OVAs) |
+| `predicate.min_runtime_diff` | `20` | minimum runtime difference in minutes |
+| `predicate.min_runtime_discrepancy_pct` | `0.25` | minimum discrepancy percentage (25%) |
 
 Tagging is reversible on purpose: when a file stops being flagged the tag is lifted again, so it reflects the current verdict rather than an old run. It is the default notification on purpose: no bot, no chat ID, no extra service, and the result is visible in Radarr's own UI. Telegram is optional and never required.
 
 ## What counts as a match
 
-Three independent things have to agree before anything is flagged:
+Verifyarr operates two independent forensic sentinels against `movieFile.mediaInfo`:
 
 ```mermaid
 flowchart TD
-    A[Movie with file] --> B{Grade is retail?<br>WEBDL, WEBRip, Bluray, Remux}
-    B -- No --> Z1[Ignore: graded honestly]
-    B -- Yes --> C{Media contradiction?<br>PCM 5.1+ or audio &gt; 1.5x video}
+    A[Movie with file] --> B{Pre-Retail Leak Check}
+    A --> E{Runtime Sanity Check}
+
+    B --> B1{Grade is retail?<br>WEBDL, WEBRip, Bluray, Remux}
+    B1 -- No --> Z1[Ignore: graded honestly]
+    B1 -- Yes --> C{Media contradiction?<br>PCM 5.1+ or audio &gt; 1.5x video}
     C -- No --> Z2[Ignore: normal stream audio]
     C -- Yes --> D{Timeline gate?<br>Release date &gt; 3 days away}
     D -- No --> Z3[Ignore: legitimate disc or drop]
     D -- Yes --> FLAG[Flag file: add tag / send alert]
+
+    E --> E1{Feature film?<br>Expected runtime &ge; 60m}
+    E1 -- No --> Z4[Ignore: short / OVA]
+    E1 -- Yes --> E2{Duration mismatch?<br>Diff &ge; 20m AND &ge; 25%}
+    E2 -- No --> Z5[Ignore: minor cut variance]
+    E2 -- Yes --> FLAG
 ```
 
-1. **The grade says retail.**  
-   The file is graded `WEBDL`, `WEBRip`, `Bluray` or `Remux`, so Radarr already believes it is retail grade. HDTV and CAM rips are excluded, because those are graded correctly and need no help.
-2. **The media contradicts it.**  
-   Uncompressed 5.1+ PCM, which is a disc or line-capture signature, since streams deliver DD+, AAC or EAC3 and never raw PCM, or an audio bitrate more than 1.5x a video bitrate under 3.5 Mbps.
-3. **The timeline allows it.**  
-   The digital release date, or the physical date for Bluray and Remux claims, is still more than 3 days away.
+### Signal 1: Pre-Retail Cinema Rip Contradiction
+Catches pre-retail leaks and line/theatrical audio captures wearing a retail label. Three independent things have to agree:
+1. **The grade says retail.** The file is graded `WEBDL`, `WEBRip`, `Bluray` or `Remux`, so Radarr already believes it is retail grade. HDTV and CAM rips are excluded, because those are graded correctly and need no help.
+2. **The media contradicts it.** Uncompressed 5.1+ PCM, which is a disc or line-capture signature (streams deliver DD+, AAC or EAC3 and never raw PCM), or an audio bitrate more than 1.5x a video bitrate under 3.5 Mbps.
+3. **The timeline allows it.** The digital release date, or the physical date for Bluray and Remux claims, is still more than 3 days away.
+
+### Signal 2: Homonym Release Collision & Runtime Mismatch
+Catches collisions where Radarr grabbed a completely different movie of the same name and year (e.g. Christopher Nolan's 173-minute *The Odyssey* matched with Marcel Walz's 86-minute indie *The Odyssey*), or severely truncated downloads and samples.
+1. **Feature length lower bound.** Expected runtime $\ge 60$ minutes. Skips anime OVAs, shorts, and specials where metadata frequently bundles multiple episodes into an arbitrary duration.
+2. **Dual-gate variance threshold.** The file duration must differ by **both $\ge 20$ minutes AND $\ge 25\%$ discrepancy** from TMDB metadata. This safely ignores routine theatrical vs. extended/director's cuts (e.g. 116m vs 90m is ~22%, ignored).
 
 ### Example: What detection looks like
 

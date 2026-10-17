@@ -445,6 +445,86 @@ def test_a_cleared_flag_lifts_the_tag():
           json.load(open(cfg["state_file"])))
 
 
+def test_parse_runtime_minutes():
+    check("parse HH:MM:SS -> 154 mins", v.parse_runtime_minutes("2:34:43") == 154)
+    check("parse MM:SS -> 24 mins", v.parse_runtime_minutes("24:34") == 24)
+    check("parse integer minutes -> 145 mins", v.parse_runtime_minutes(145) == 145)
+    check("parse string integer -> 86 mins", v.parse_runtime_minutes("86") == 86)
+    check("parse None / empty -> 0 mins", v.parse_runtime_minutes(None) == 0 and v.parse_runtime_minutes("") == 0)
+
+
+def test_runtime_mismatch_incident_is_flagged():
+    # Real incident: The Odyssey (2026) - expected 173m, actual Marcel Walz release is 86m
+    reasons = v.looks_like_runtime_mismatch(173, "1:26:03")
+    check("The Odyssey homonym incident is flagged", len(reasons) == 1, reasons)
+    check("...and mentions 86 minutes and 173 minutes",
+          any("86 minutes" in r and "173 minutes" in r for r in reasons))
+    check("...and identifies as shorter", any("shorter" in r for r in reasons))
+
+
+def test_runtime_mismatch_longer_file_is_flagged():
+    reasons = v.looks_like_runtime_mismatch(90, "2:30:00")
+    check("Severely longer file is flagged", len(reasons) == 1, reasons)
+    check("...and identifies as longer", any("longer" in r for r in reasons))
+
+
+def test_runtime_mismatch_minor_variance_not_flagged():
+    # Theatrical vs Director's Cut (e.g. Solo Leveling 116m vs 90m = 22.4% diff, below 25% threshold)
+    check("Solo Leveling 116m vs 90m cut difference -> NOT flagged",
+          v.looks_like_runtime_mismatch(116, "1:30:13") == [])
+    # 145m vs 140m = 3.4% diff -> clean
+    check("145m vs 140m normal discrepancy -> NOT flagged",
+          v.looks_like_runtime_mismatch(145, "2:20:00") == [])
+
+
+def test_runtime_mismatch_short_film_not_flagged():
+    # Anime OVA / short (< 60m): expected 52m vs 24m -> skipped by min_feature_runtime
+    check("Short OVA 52m vs 24m -> NOT flagged (below 60m feature threshold)",
+          v.looks_like_runtime_mismatch(52, "24:34") == [])
+
+
+def test_runtime_mismatch_invalid_inputs_fail_safe():
+    check("Missing expected runtime -> NOT flagged", v.looks_like_runtime_mismatch(None, "1:30:00") == [])
+    check("Missing file runtime -> NOT flagged", v.looks_like_runtime_mismatch(120, None) == [])
+    check("Zero expected runtime -> NOT flagged", v.looks_like_runtime_mismatch(0, "1:30:00") == [])
+
+
+def test_scan_flags_runtime_mismatch():
+    # A movie with normal EAC3 audio and past retail date, but 50% runtime discrepancy
+    movie = {
+        "id": 88,
+        "title": "The Odyssey",
+        "runtime": 173,
+        "monitored": True,
+        "hasFile": True,
+        "digitalRelease": _date(-30),
+        "physicalRelease": _date(-10),
+        "movieFile": {
+            "id": 12,
+            "relativePath": "The.Odyssey.2026.1080p.AMZN.WEB-DL.mkv",
+            "releaseGroup": "Kitsune",
+            "quality": {"quality": {"name": "WEBDL-1080p"}},
+            "mediaInfo": {
+                "audioCodec": "EAC3",
+                "audioChannels": 6,
+                "audioBitrate": 640000,
+                "videoCodec": "x264",
+                "videoBitrate": 8000000,
+                "runTime": "1:26:03"
+            }
+        }
+    }
+    cfg = {"state_file": tempfile.NamedTemporaryFile(delete=False).name,
+           "tag": {"enabled": True, "label": "verifyarr-suspect"},
+           "mode": "report"}
+    client = FakeRadarr([movie])
+    findings, state = v.scan(cfg, client)
+    check("scan flags runtime mismatch movie", len(findings) == 1)
+    check("...and tags it with verifyarr-suspect", getattr(client, "tagged", []) == [88])
+    check("...and reason mentions runtime mismatch", any("runtime mismatch" in r for r in findings[0][2]["reasons"]))
+    os.remove(cfg["state_file"])
+
+
 def test_drops_detection():
     past_movie = {"id": 101, "title": "Past Movie", "monitored": True, "hasFile": False,
                   "digitalRelease": _date(-5), "status": "released"}

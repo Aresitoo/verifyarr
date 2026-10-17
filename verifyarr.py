@@ -35,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 RETAIL_TIERS = ("WEBDL", "WEBRIP", "BLURAY", "REMUX")
 PCM_CODECS = ("pcm", "lpcm")
@@ -50,6 +50,9 @@ DEFAULTS = {
     "thin_video_bps": 3_500_000,  # "thin video" bound for the audio-inversion signal
     "audio_ratio": 1.5,           # audio bitrate versus video bitrate
     "pcm_min_channels": 5,        # uncompressed audio at this many channels or more
+    "min_feature_runtime": 60,    # feature film lower bound in minutes (skips shorts/OVAs)
+    "min_runtime_diff": 20,       # minimum absolute runtime difference in minutes
+    "min_runtime_discrepancy_pct": 0.25,  # minimum percentage discrepancy (25%)
 }
 
 
@@ -138,6 +141,67 @@ def looks_like_disguised_preretail(media, tier, digital_days, physical_days, **k
     elif digital_days is not None and digital_days > p["min_days_to_retail"]:
         reasons.append("the digital release is still %.1f days away" % digital_days)
     return reasons
+
+
+def parse_runtime_minutes(rt_str):
+    """Whole minutes parsed from HH:MM:SS, MM:SS, or integer/float. Pure."""
+    if not rt_str or not isinstance(rt_str, (str, int, float)):
+        return 0
+    if isinstance(rt_str, (int, float)):
+        return int(rt_str if rt_str < 500 else rt_str / 60)
+    parts = str(rt_str).strip().split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 2:
+            return int(parts[0])
+        elif len(parts) == 1:
+            val = float(parts[0])
+            return int(val if val < 500 else val / 60)
+    except Exception:
+        return 0
+    return 0
+
+
+def looks_like_runtime_mismatch(expected_runtime, actual_runtime, **kw):
+    """PURE. Returns reasons if file duration contradicts TMDB metadata.
+
+    Guards against false positives:
+      1. Requires expected runtime >= min_feature_runtime (default 60 mins). Skips OVAs,
+         shorts, anime specials where metadata frequently groups/bundles episodes.
+      2. Requires actual file runtime > 0.
+      3. Requires absolute difference >= min_runtime_diff (default 20 mins) AND
+         discrepancy >= min_runtime_discrepancy_pct (default 0.25 / 25%).
+         Skips theatrical vs extended/director cuts (e.g. 116m vs 90m is ~22%, ignored).
+
+    Catches homonym release collisions (e.g. Christopher Nolan's 173m 'The Odyssey' matched
+    with Marcel Walz's 86m 'The Odyssey') and severely truncated downloads or sample files.
+    """
+    p = dict(DEFAULTS, **(kw or {}))
+    min_feature = p.get("min_feature_runtime", 60)
+    min_diff = p.get("min_runtime_diff", 20)
+    min_pct = p.get("min_runtime_discrepancy_pct", 0.25)
+
+    try:
+        exp = int(expected_runtime or 0)
+    except (ValueError, TypeError):
+        return []
+
+    act = parse_runtime_minutes(actual_runtime)
+    if exp < min_feature or act <= 0:
+        return []
+
+    diff = abs(exp - act)
+    pct = diff / float(exp)
+
+    if diff >= min_diff and pct >= min_pct:
+        direction = "shorter" if act < exp else "longer"
+        return [
+            "runtime mismatch: file is %d minutes (%s than expected %d minutes from TMDB, %d%% discrepancy); "
+            "probable homonym release collision or truncated file"
+            % (act, direction, exp, int(round(pct * 100)))
+        ]
+    return []
 
 
 def is_approved_candidate(rel):
@@ -332,18 +396,25 @@ def scan(cfg, client, now=None, dry=False):
             continue
         key = "%s:%s" % (movie.get("id"), mf.get("id"))
         seen.add(key)
-        reasons = looks_like_disguised_preretail(
+        preretail_reasons = looks_like_disguised_preretail(
             mf.get("mediaInfo"),
             ((mf.get("quality") or {}).get("quality") or {}).get("name"),
             days_until(movie.get("digitalRelease"), now),
             days_until(movie.get("physicalRelease"), now),
             **pred)
+        runtime_reasons = looks_like_runtime_mismatch(
+            movie.get("runtime"),
+            (mf.get("mediaInfo") or {}).get("runTime"),
+            **pred)
+        reasons = preretail_reasons + runtime_reasons
         if not reasons:
             continue
         entry = {
             "movieId": movie.get("id"), "fileId": mf.get("id"), "title": movie.get("title"),
             "claimedQuality": ((mf.get("quality") or {}).get("quality") or {}).get("name"),
             "releaseGroup": mf.get("releaseGroup"),
+            "expectedRuntime": movie.get("runtime"),
+            "actualRuntime": parse_runtime_minutes((mf.get("mediaInfo") or {}).get("runTime")),
             "digitalRelease": str(movie.get("digitalRelease") or "")[:10],
             "physicalRelease": str(movie.get("physicalRelease") or "")[:10],
             "reasons": reasons,
