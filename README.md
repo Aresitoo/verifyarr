@@ -309,7 +309,7 @@ These are deliberate, not oversights.
 
   If a movie has no digital or physical date, nothing happens, by design. Silence beats a guess.
 
-- **Replace mode is non-destructive.** It grabs the highest-scoring approved release directly via `POST /api/v3/release`. The existing file is never deleted in advance—Radarr manages the download and upgrades the file only once the replacement imports cleanly.
+- **Replace mode is non-destructive.** It grabs the highest-scoring approved release directly via `POST /api/v3/release`. The existing file is never deleted in advance: Radarr manages the download and upgrades the file only once the replacement imports cleanly.
 
 - **It catches a rare problem.** 
 
